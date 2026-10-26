@@ -1,0 +1,9 @@
+<main>
+  <h1>ЕПБtuning — админка</h1>
+  <ul>
+    @for (s of statuses; track s[0]) {
+      <li>{{ s[1] }}</li>
+    }
+  </ul>
+</main>
+<router-outlet />

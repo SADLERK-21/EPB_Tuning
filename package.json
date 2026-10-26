@@ -1,0 +1,21 @@
+{
+  "name": "epb",
+  "private": true,
+  "packageManager": "npm@11.19.0",
+  "workspaces": [
+    "libs/shared",
+    "apps/api",
+    "apps/shop",
+    "apps/admin"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:migrate": "npm run db:migrate -w api",
+    "dev:shared": "npm run watch -w @epb/shared",
+    "dev:api": "npm run start:dev -w api",
+    "dev:shop": "npm start -w shop",
+    "dev:admin": "npm start -w admin",
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces --if-present"
+  }
+}

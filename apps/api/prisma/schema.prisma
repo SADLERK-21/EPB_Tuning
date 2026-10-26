@@ -1,0 +1,351 @@
+// Схема БД EPB. Деньги — Decimal(12,2) в рублях, никогда не Float.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────── Автомобили (посадочные страницы) ───────────────────────────
+
+/// Марка: Toyota, Nissan, BMW…
+model CarMake {
+  id        Int        @id @default(autoincrement())
+  name      String
+  slug      String     @unique
+  sortOrder Int        @default(0)
+  logoId    Int?
+  logo      Media?     @relation(fields: [logoId], references: [id], onDelete: SetNull)
+  models    CarModel[]
+
+  seoTitle       String?
+  seoDescription String?
+  h1             String?
+  noindex        Boolean @default(false)
+  legacyPath     String? @unique /// URL на старом сайте, для 301 и сверки
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Модель: Mark II, Silvia, 3 series…
+model CarModel {
+  id        Int       @id @default(autoincrement())
+  makeId    Int
+  make      CarMake   @relation(fields: [makeId], references: [id], onDelete: Restrict)
+  name      String
+  slug      String
+  sortOrder Int       @default(0)
+  bodies    CarBody[]
+
+  seoTitle       String?
+  seoDescription String?
+  h1             String?
+  noindex        Boolean @default(false)
+  legacyPath     String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([makeId, slug])
+}
+
+/// Кузов (код шасси): JZX100, S13, E36… Главная SEO-посадочная страница.
+model CarBody {
+  id        Int       @id @default(autoincrement())
+  modelId   Int
+  model     CarModel  @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  code      String /// как пишется в каталоге: JZX100 (только латиница)
+  slug      String
+  yearFrom  Int?
+  yearTo    Int?
+  sortOrder Int       @default(0)
+  products  Product[] /// совместимость (many-to-many)
+
+  seoTitle       String?
+  seoDescription String?
+  h1             String?
+  noindex        Boolean @default(false)
+  legacyPath     String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([modelId, slug])
+}
+
+// ─────────────────────────── Каталог ───────────────────────────
+
+/// Тип детали, дерево: Сцепление → 2х дисковое → Демпферное; Рычаги; Койловеры…
+model Category {
+  id          Int        @id @default(autoincrement())
+  parentId    Int?
+  parent      Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Category[] @relation("CategoryTree")
+  name        String
+  slug        String     @unique /// уникален глобально, чтобы корни дерева не дублировались
+  sortOrder   Int        @default(0)
+  description String?
+  products    Product[]
+
+  seoTitle       String?
+  seoDescription String?
+  h1             String?
+  noindex        Boolean @default(false)
+  legacyPath     String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+}
+
+/// Узел автомобиля: передняя подвеска, задняя верхняя подвеска, салон…
+model Assembly {
+  id        Int       @id @default(autoincrement())
+  name      String
+  slug      String    @unique
+  sortOrder Int       @default(0)
+  products  Product[]
+}
+
+model Product {
+  id               Int           @id @default(autoincrement())
+  sku              String?       @unique /// артикул, напр. 0040030101001
+  name             String
+  slug             String        @unique
+  status           ProductStatus @default(DRAFT) /// публикация на сайте
+  availability     Availability  @default(MADE_TO_ORDER)
+  leadTimeDays     Int? /// срок изготовления, если под заказ
+  price            Decimal?      @db.Decimal(12, 2) /// null = «цена по запросу»
+  oldPrice         Decimal?      @db.Decimal(12, 2)
+  line             ProductLine?
+  brand            String        @default("ЕПБtuning")
+  shortDescription String?
+  description      String? /// HTML из редактора админки
+  specs            Json? /// [{ "name": "Регулировка", "value": "380–420 мм" }]
+  kit              String? /// комплектация
+
+  categoryId Int?
+  category   Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  assemblyId Int?
+  assembly   Assembly?      @relation(fields: [assemblyId], references: [id], onDelete: SetNull)
+  bodies     CarBody[] /// совместимые кузова
+  images     ProductImage[]
+  related    Product[]      @relation("RelatedProducts") /// «с этим покупают»
+  relatedOf  Product[]      @relation("RelatedProducts")
+  orderItems OrderItem[]
+
+  seoTitle       String?
+  seoDescription String?
+  h1             String?
+  noindex        Boolean @default(false)
+  legacyPath     String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([categoryId])
+  @@index([assemblyId])
+}
+
+/// Файл в медиатеке. Сам файл на диске, WebP/AVIF-размеры лежат рядом по соглашению имён.
+model Media {
+  id            Int            @id @default(autoincrement())
+  path          String         @unique /// относительный путь: 2026/10/abc123.jpg
+  mime          String
+  size          Int /// байты
+  width         Int?
+  height        Int?
+  alt           String?
+  productImages ProductImage[]
+  carMakes      CarMake[]
+  createdAt     DateTime       @default(now())
+}
+
+model ProductImage {
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaId   Int
+  media     Media   @relation(fields: [mediaId], references: [id], onDelete: Restrict) /// файл нельзя удалить, пока он в товаре
+  sortOrder Int     @default(0) /// 0 = главное фото
+
+  @@id([productId, mediaId])
+  @@index([mediaId])
+}
+
+/// 301 со старых URL. Проверяется до роутинга витрины.
+model Redirect {
+  id        Int      @id @default(autoincrement())
+  fromPath  String   @unique /// /product/nissan/silvia/s13/perednyaya-podveska13/
+  toPath    String
+  code      Int      @default(301)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// Соответствует schema.org: InStock / MadeToOrder / OutOfStock
+enum Availability {
+  IN_STOCK
+  MADE_TO_ORDER
+  OUT_OF_STOCK
+}
+
+enum ProductLine {
+  STREET
+  PRO
+}
+
+// ─────────────────────────── Заказы ───────────────────────────
+
+model Order {
+  id            Int            @id @default(autoincrement()) /// номер заказа для клиента
+  accessToken   String         @unique @default(uuid()) /// ссылка на страницу статуса без входа
+  status        OrderStatus    @default(NEW)
+  paymentStatus PaymentStatus  @default(UNPAID)
+  paymentMethod PaymentMethod?
+  paidAmount    Decimal        @default(0) @db.Decimal(12, 2)
+  source        OrderSource    @default(CART)
+
+  customerName    String
+  phone           String /// в формате +79991234567
+  email           String?
+  customerComment String?
+  companyName     String? /// для оплаты по счёту
+  inn             String?
+
+  deliveryMethod  DeliveryMethod?
+  deliveryCity    String?
+  deliveryAddress String? /// адрес или адрес ПВЗ
+  cdekPointCode   String?
+  trackingNumber  String?
+
+  /// Снимок сумм на момент заказа: total = itemsTotal + deliveryCost - discount (считает API)
+  itemsTotal   Decimal @db.Decimal(12, 2)
+  deliveryCost Decimal @default(0) @db.Decimal(12, 2)
+  discount     Decimal @default(0) @db.Decimal(12, 2)
+  total        Decimal @db.Decimal(12, 2)
+
+  managerId Int?
+  manager   User?        @relation(fields: [managerId], references: [id], onDelete: SetNull)
+  items     OrderItem[]
+  events    OrderEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([phone])
+  @@index([managerId])
+}
+
+/// Позиция заказа хранит снимок названия и цены: товар потом могут переименовать или удалить.
+model OrderItem {
+  id        Int      @id @default(autoincrement())
+  orderId   Int
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId Int?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  sku       String?
+  name      String
+  price     Decimal  @db.Decimal(12, 2)
+  quantity  Int
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+/// История заказа: смена статуса, оплата, комментарии менеджера, отправленные уведомления.
+model OrderEvent {
+  id         Int            @id @default(autoincrement())
+  orderId    Int
+  order      Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type       OrderEventType
+  fromStatus OrderStatus?
+  toStatus   OrderStatus?
+  message    String?
+  authorId   Int? /// null = клиент или система
+  author     User?          @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime       @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// Значения и подписи статусов продублированы в libs/shared/src/order-status.ts (проверяется при сборке api).
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  IN_PRODUCTION
+  READY
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum PaymentMethod {
+  ONLINE
+  BANK_TRANSFER
+  INVOICE
+}
+
+enum DeliveryMethod {
+  CDEK_PVZ
+  CDEK_COURIER
+  PICKUP
+  OTHER
+}
+
+enum OrderSource {
+  CART
+  ONE_CLICK
+  MANAGER
+}
+
+enum OrderEventType {
+  CREATED
+  STATUS
+  PAYMENT
+  COMMENT
+  NOTIFICATION
+}
+
+// ─────────────────────────── Сотрудники ───────────────────────────
+
+model User {
+  id           Int          @id @default(autoincrement())
+  email        String       @unique /// хранится в нижнем регистре
+  name         String
+  passwordHash String /// argon2id
+  role         UserRole     @default(MANAGER)
+  isActive     Boolean      @default(true)
+  lastLoginAt  DateTime?
+  orders       Order[]
+  orderEvents  OrderEvent[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MANAGER
+  CONTENT
+}
